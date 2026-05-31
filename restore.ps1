@@ -34,12 +34,30 @@ $snapDir     = Join-Path $ClaudeHome 'session-keeper\snapshots'
 
 function Get-BootMs { [DateTimeOffset]::new((Get-CimInstance Win32_OperatingSystem).LastBootUpTime).ToUnixTimeMilliseconds() }
 
+# 进程真活着吗？硬重启/断电后 ~/.claude/sessions 会残留一批死进程的 json(Claude 下次启动才清)，
+# 必须用 pid 校验，否则会把这些尸体误判成"在跑"，反而把最该恢复的窗口排除掉。
+# 再比对 procStart(进程启动 ticks) 防 pid 重用。
+function Test-LiveProc($procId, $procStart) {
+  $pidInt = 0; if (-not [int]::TryParse([string]$procId, [ref]$pidInt) -or $pidInt -le 0) { return $false }
+  $p = Get-Process -Id $pidInt -EA SilentlyContinue
+  if (-not $p) { return $false }
+  if ($procStart) {
+    $want = [long]0
+    if ([long]::TryParse([string]$procStart, [ref]$want) -and $want -gt 0) {
+      try { if ([math]::Abs($p.StartTime.Ticks - $want) -gt 20000000) { return $false } } catch {}  # 容差 2s
+    }
+  }
+  return $true
+}
+
 function Get-LiveIds {
   $h = @{}
   if (Test-Path -LiteralPath $sessionsDir) {
     foreach ($f in Get-ChildItem -LiteralPath $sessionsDir -Filter *.json -File -EA SilentlyContinue) {
       try { $o = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch { continue }
-      if ($o.kind -eq 'interactive' -and $o.sessionId) { $h[[string]$o.sessionId] = $true }
+      if ($o.kind -ne 'interactive' -or -not $o.sessionId) { continue }
+      if (-not (Test-LiveProc $o.pid $o.procStart)) { continue }   # 死进程尸体不算在跑
+      $h[[string]$o.sessionId] = $true
     }
   }
   $h
