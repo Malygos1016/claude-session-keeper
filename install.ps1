@@ -84,12 +84,16 @@ if (-not $NoTask) {
   $taskName = 'ClaudeSessionKeeper-Snapshot'; $taskOk = $false
   try {
     $act = New-ScheduledTaskAction -Execute $pwsh -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $snapshot + '"')
-    $trg = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $rep = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) -RepetitionDuration (New-TimeSpan -Days 3650)
-    $trg.Repetition = $rep.Repetition
+    $repSpan = New-TimeSpan -Minutes $IntervalMinutes
+    $durSpan = New-TimeSpan -Days 3650
+    # 触发器1：每次登录后启动重复 —— 保证重启后续得上
+    $trgLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $trgLogon.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval $repSpan -RepetitionDuration $durSpan).Repetition
+    # 触发器2：时间触发锚定当天0点(明确的过去时刻)+重复 —— 不依赖登录，安装后立即稳定每N分钟跑，消除装好头几分钟的空档
+    $trgTime = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval $repSpan -RepetitionDuration $durSpan
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -Hidden
     $prin = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $taskName -Action $act -Trigger $trg -Settings $set -Principal $prin -Force | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $act -Trigger @($trgLogon, $trgTime) -Settings $set -Principal $prin -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName -EA SilentlyContinue
     $taskOk = $true
     Write-Host "  [OK] 计划任务 '$taskName'：每 $IntervalMinutes 分钟快照(隐藏运行)" -ForegroundColor Green
