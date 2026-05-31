@@ -37,6 +37,10 @@ function Get-BootMs { [DateTimeOffset]::new((Get-CimInstance Win32_OperatingSyst
 # 进程真活着吗？硬重启/断电后 ~/.claude/sessions 会残留一批死进程的 json(Claude 下次启动才清)，
 # 必须用 pid 校验，否则会把这些尸体误判成"在跑"，反而把最该恢复的窗口排除掉。
 # 再比对 procStart(进程启动 ticks) 防 pid 重用。
+# 关键设计：Claude 的 session 进程一定是当前用户拥有的(pwsh/node/claude.exe，Interactive 限权)，
+# 其 StartTime 必然可读。所以若 StartTime 读不出来(拒绝访问)，该进程几乎必然【不是】我们的会话
+# (是某个高权限进程恰好重用了旧 pid)——此时按"非在跑"处理，让该窗口被恢复。
+# 这样把失败方向偏向"宁可多开一个重复 tab(无害)，也不漏开本该恢复的窗口"。
 function Test-LiveProc($procId, $procStart) {
   $pidInt = 0; if (-not [int]::TryParse([string]$procId, [ref]$pidInt) -or $pidInt -le 0) { return $false }
   $p = Get-Process -Id $pidInt -EA SilentlyContinue
@@ -44,7 +48,14 @@ function Test-LiveProc($procId, $procStart) {
   if ($procStart) {
     $want = [long]0
     if ([long]::TryParse([string]$procStart, [ref]$want) -and $want -gt 0) {
-      try { if ([math]::Abs($p.StartTime.Ticks - $want) -gt 20000000) { return $false } } catch {}  # 容差 2s
+      # 能读启动时间：精确判定身份(防 pid 重用)，容差 2s
+      try { return ([math]::Abs($p.StartTime.Ticks - $want) -le 20000000) }
+      catch {
+        # StartTime 读不出 = 高权限进程。用进程名兜底(进程名无需高权限即可读，已实测 csrss/wininit 验证)：
+        #   名字不是 claude 启动器 → 外来进程冒用了旧 pid，我们的会话已死 → 判非在跑(照常恢复，不会重复)
+        #   名字是 claude/node → 可能是会话以管理员身份在跑 → 判在跑(避免开重复窗口)
+        try { return ($p.ProcessName -in @('claude', 'node')) } catch { return $false }
+      }
     }
   }
   return $true
