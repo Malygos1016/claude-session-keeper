@@ -83,7 +83,10 @@ if (-not $NoShortcut) {
 if (-not $NoTask) {
   $taskName = 'ClaudeSessionKeeper-Snapshot'; $taskOk = $false
   try {
-    $act = New-ScheduledTaskAction -Execute $pwsh -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $snapshot + '"')
+    # 经 wscript 调 run-hidden.vbs 隐藏启动 pwsh —— 直接调 pwsh.exe(控制台程序)即使 Hidden 也会每次闪窗，
+    # 用 vbs 的 WshShell.Run(...,0,...) 从源头不创建可见窗口，完全无感。
+    $vbsRun = Join-Path $Dir 'run-hidden.vbs'
+    $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"' + $vbsRun + '" "' + $pwsh + '" "' + $snapshot + '"')
     $repSpan = New-TimeSpan -Minutes $IntervalMinutes
     $durSpan = New-TimeSpan -Days 3650
     # 触发器1：每次登录后启动重复 —— 保证重启后续得上
