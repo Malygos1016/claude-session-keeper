@@ -1,0 +1,10 @@
+# 运行时数据 —— 这是每台机器自己的会话存档，不进版本库
+snapshots/
+latest.json
+
+# 安装器在无管理员权限时退回生成的常驻循环脚本（本地产物）
+snapshot-loop.ps1
+
+# 备份
+*.skbak
+*.bak
